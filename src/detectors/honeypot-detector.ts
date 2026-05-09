@@ -33,6 +33,36 @@ const HONEYPOT_SELECTORS: Record<string, string> = {
   "bbc0c742": "tradingOpen", // trading flag
 };
 
+// Selectors that indicate anti-sniper / blacklist traps
+const SNIPER_TRAP_SELECTORS: Record<string, { name: string; weight: number }> = {
+  // Bot blacklisting
+  "b515566a": { name: "addBots(address[])", weight: 3 },
+  "d5d7bc17": { name: "addBot(address)", weight: 3 },
+  "3fc8cef3": { name: "delBots(address[])", weight: 1 }, // presence confirms bot system exists
+  "b87f137a": { name: "isBot(address)", weight: 2 },
+
+  // Owner can change fees dynamically
+  "bf474bed": { name: "reduceFee(uint256)", weight: 2 },
+  "4f7041a5": { name: "setFee(uint256)", weight: 2 },
+  "a5ece941": { name: "setFeeAddress(address)", weight: 1 },
+  "a9e282b8": { name: "setBlacklist(address,bool)", weight: 3 },
+
+  // Trading gate
+  "c9567bf9": { name: "openTrading()", weight: 2 },
+  "8f70ccf7": { name: "setTradingOpen(bool)", weight: 2 },
+
+  // Manual token/ETH drain by owner
+  "51bc3c85": { name: "manualSwap()", weight: 2 },
+  "c3c8cd80": { name: "manualSend()", weight: 2 },
+
+  // Max tx / wallet limits (not inherently bad but common in scams)
+  "74010ece": { name: "setMaxTxAmount(uint256)", weight: 1 },
+  "f2fde38b": { name: "transferOwnership(address)", weight: 0 }, // neutral
+};
+
+// Threshold: total weight >= this means sniper trap
+const SNIPER_TRAP_THRESHOLD = 5;
+
 const MAX_ACCEPTABLE_TAX = 15; // percent — anything above this is likely a scam
 
 export const honeypotDetector: Detector = {
@@ -70,17 +100,8 @@ export const honeypotDetector: Detector = {
     if (!tokenBytecode || tokenBytecode === "0x") return;
 
     const code = tokenBytecode.slice(2);
-    const suspiciousFindings: string[] = [];
 
-    // Check for trading restrictions
-    for (const [selector, name] of Object.entries(HONEYPOT_SELECTORS)) {
-      if (["transfer", "transferFrom", "allowance", "approve", "name"].includes(name)) continue;
-      if (code.includes(selector)) {
-        suspiciousFindings.push(name);
-      }
-    }
-
-    // Try to read token metadata
+    // Read token metadata early so all checks can use it
     let tokenSymbol = "UNKNOWN";
     let tokenDecimals = 18;
     try {
@@ -100,6 +121,41 @@ export const honeypotDetector: Detector = {
 
     ctx.meta.tokenSymbol = tokenSymbol;
     ctx.meta.tokenDecimals = tokenDecimals;
+
+    const suspiciousFindings: string[] = [];
+
+    // Check for trading restrictions
+    for (const [selector, name] of Object.entries(HONEYPOT_SELECTORS)) {
+      if (["transfer", "transferFrom", "allowance", "approve", "name"].includes(name)) continue;
+      if (code.includes(selector)) {
+        suspiciousFindings.push(name);
+      }
+    }
+
+    // Check for sniper trap patterns (blacklists, fee manipulation, trading gates)
+    let sniperTrapScore = 0;
+    const trapFindings: string[] = [];
+    for (const [selector, info] of Object.entries(SNIPER_TRAP_SELECTORS)) {
+      if (code.includes(selector)) {
+        sniperTrapScore += info.weight;
+        trapFindings.push(info.name);
+      }
+    }
+
+    const isSniperTrap = sniperTrapScore >= SNIPER_TRAP_THRESHOLD;
+    ctx.meta.sniperTrapScore = sniperTrapScore;
+    ctx.meta.trapFindings = trapFindings;
+
+    if (isSniperTrap) {
+      ctx.tags.add("sniper-trap");
+      ctx.findings.push({
+        detector: "honeypot",
+        severity: "critical",
+        title: `Sniper trap detected: ${tokenSymbol || "UNKNOWN"}`,
+        description: `Score ${sniperTrapScore}/${SNIPER_TRAP_THRESHOLD} — ${trapFindings.join(", ")}. Early buyers will likely be blacklisted.`,
+      });
+      // Don't return — still do the buy/sell sim for data, but it won't be marked snipeable
+    }
 
     // Check total supply
     let totalSupply = 0n;
@@ -216,7 +272,7 @@ export const honeypotDetector: Detector = {
     }
 
     // If it passed all checks — it's snipeable
-    if (effectiveTax <= MAX_ACCEPTABLE_TAX && !isHoneypot && baseLiquidity > 0n) {
+    if (effectiveTax <= MAX_ACCEPTABLE_TAX && !isHoneypot && !isSniperTrap && baseLiquidity > 0n) {
       ctx.tags.add("snipeable");
       ctx.findings.push({
         detector: "honeypot",
