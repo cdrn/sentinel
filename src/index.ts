@@ -32,11 +32,11 @@ const SCORE_THRESHOLD = 30;
 const EXECUTE_THRESHOLD = 50;
 
 async function main() {
-  console.log("Sentinel - Contract Deployment Scanner");
+  console.log("Backdraft - Contract Deployment Scanner");
   console.log("=======================================\n");
 
   const store = new Store();
-  console.log("Database: sentinel.db\n");
+  console.log("Database: backdraft.db\n");
 
   const pipeline = new Pipeline();
   console.log("Loading detectors:");

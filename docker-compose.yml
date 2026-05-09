@@ -1,13 +1,13 @@
 services:
-  sentinel:
-    image: ghcr.io/cdrn/sentinel:latest
-    container_name: sentinel
+  backdraft:
+    image: ghcr.io/cdrn/backdraft:latest
+    container_name: backdraft
     restart: unless-stopped
     env_file: .env
     environment:
-      - DB_PATH=/app/data/sentinel.db
+      - DB_PATH=/app/data/backdraft.db
     volumes:
-      - sentinel-data:/app/data
+      - backdraft-data:/app/data
 
   watchtower:
     image: containrrr/watchtower
@@ -15,7 +15,7 @@ services:
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    command: --interval 60 sentinel
+    command: --interval 60 backdraft
 
 volumes:
-  sentinel-data:
+  backdraft-data:

@@ -4,7 +4,7 @@ import type { PipelineResult } from "../detectors/pipeline.js";
 import type { Finding } from "../detectors/types.js";
 import type { ExecutionResult } from "../executor/index.js";
 
-const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), "sentinel.db");
+const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), "backdraft.db");
 
 export class Store {
   private db: Database.Database;

@@ -55,7 +55,7 @@ export class TelegramAlert {
       : "";
 
     const text = [
-      `🚨 <b>Sentinel Alert — Score ${result.score}/100</b>`,
+      `🚨 <b>Backdraft Alert — Score ${result.score}/100</b>`,
       ``,
       `<b>Chain:</b> ${result.contract.chain}`,
       `<b>Contract:</b> <a href="${addressUrl}">${result.contract.address}</a>`,
