@@ -10,6 +10,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { PipelineResult } from "../detectors/pipeline.js";
+import { shouldSnipe, buildSnipeTx } from "./strategies/snipe.js";
 
 export interface ExecutionResult {
   action: string;
@@ -30,6 +31,13 @@ type ActionBuilder = (result: PipelineResult) => {
 
 // Map tags/meta to concrete transactions
 const ACTION_BUILDERS: ActionBuilder[] = [
+  // Pool snipe — buy into new token (placeholder address, rebuilt in execute())
+  (result) => {
+    if (!shouldSnipe(result)) return null;
+    return buildSnipeTx(result, "0x0000000000000000000000000000000000000001");
+  },
+
+
   // Uninitialized proxy — call initialize() to claim ownership
   (result) => {
     if (!result.tags.has("uninitialized")) return null;
@@ -142,14 +150,21 @@ export class Executor {
   ): Promise<ExecutionResult[]> {
     const results: ExecutionResult[] = [];
 
-    for (const builder of ACTION_BUILDERS) {
+    for (let builder of ACTION_BUILDERS) {
+      // For snipe actions, rebuild with real wallet address
+      if (this.account && shouldSnipe(result)) {
+        const snipeTx = buildSnipeTx(result, this.account.address);
+        if (snipeTx) {
+          builder = () => snipeTx;
+        }
+      }
+
       const action = builder(result);
       if (!action) continue;
 
       // Inject our wallet address into any address-type args (replace zero padding)
       let calldata = action.data;
       if (this.account && calldata.length > 10) {
-        // Replace zero-padded address args with our address
         const addr = this.account.address.slice(2).toLowerCase().padStart(64, "0");
         calldata = calldata.replace("0".repeat(64), addr) as `0x${string}`;
       }

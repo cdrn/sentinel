@@ -97,6 +97,12 @@ export class FactoryListener {
               blockNumber: log.blockNumber!,
               chain: this.chainName,
               timestamp: Number(block.timestamp),
+              poolInfo: {
+                token0: token0 as `0x${string}`,
+                token1: token1 as `0x${string}`,
+                factory: factory.label,
+                dexType: factory.type,
+              },
             };
 
             console.log(

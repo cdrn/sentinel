@@ -11,6 +11,7 @@ import {
   openWithdrawalDetector,
   ownershipDetector,
   valueDetector,
+  honeypotDetector,
 } from "./detectors/index.js";
 import { Store } from "./store/index.js";
 import { Executor } from "./executor/index.js";
@@ -45,6 +46,7 @@ async function main() {
   pipeline.register(initializerDetector);
   pipeline.register(openWithdrawalDetector);
   pipeline.register(ownershipDetector);
+  pipeline.register(honeypotDetector);
   console.log("");
 
   console.log("Executor:");
@@ -76,7 +78,9 @@ async function main() {
         tg.alertFinding(result);
       }
 
-      if (result.score >= EXECUTE_THRESHOLD && result.findings.some(f => f.severity === "critical")) {
+      const shouldExecute = (result.score >= EXECUTE_THRESHOLD && result.findings.some(f => f.severity === "critical"))
+        || result.tags.has("snipeable");
+      if (shouldExecute) {
         const execResults = await executor.execute(result, client);
         totalExecuted += execResults.length;
 

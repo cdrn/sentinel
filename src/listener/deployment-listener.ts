@@ -8,6 +8,12 @@ export interface DeployedContract {
   blockNumber: bigint;
   chain: string;
   timestamp: number;
+  poolInfo?: {
+    token0: `0x${string}`;
+    token1: `0x${string}`;
+    factory: string;
+    dexType: "uniswap-v2" | "uniswap-v3";
+  };
 }
 
 type ContractHandler = (contract: DeployedContract) => void | Promise<void>;
