@@ -194,7 +194,7 @@ export class ArbListener {
         const testAmount = 5000000000000000n; // 0.005 WETH
 
         // Simulate the actual arb to get exact profit
-        const estimatedProfit = this.simulateArb(buyPool, sellPool, testAmount);
+        const estimatedProfit = this.simulateArb(buyPool, sellPool, testAmount, pair.decimals0, pair.decimals1);
 
         if (estimatedProfit <= 0n) continue;
 
@@ -212,22 +212,22 @@ export class ArbListener {
     return opportunities;
   }
 
-  private simulateArb(buyPool: PoolPrice, sellPool: PoolPrice, amountIn: bigint): bigint {
-    // Step 1: WETH → USDC on buyPool (where we get more USDC)
-    const usdcOut = this.getAmountOut(buyPool, amountIn, true);
-    if (usdcOut <= 0n) return 0n;
+  private simulateArb(buyPool: PoolPrice, sellPool: PoolPrice, amountIn: bigint, decimals0: number, decimals1: number): bigint {
+    // Step 1: token0 → token1 on buyPool (where we get more token1)
+    const token1Out = this.getAmountOut(buyPool, amountIn, true, decimals0, decimals1);
+    if (token1Out <= 0n) return 0n;
 
-    // Step 2: USDC → WETH on sellPool (where USDC buys more WETH)
-    const wethOut = this.getAmountOut(sellPool, usdcOut, false);
-    if (wethOut <= 0n) return 0n;
+    // Step 2: token1 → token0 on sellPool (where token1 buys more token0)
+    const token0Out = this.getAmountOut(sellPool, token1Out, false, decimals0, decimals1);
+    if (token0Out <= 0n) return 0n;
 
-    return wethOut - amountIn;
+    return token0Out - amountIn;
   }
 
-  private getAmountOut(pool: PoolPrice, amountIn: bigint, zeroForOne: boolean): bigint {
+  private getAmountOut(pool: PoolPrice, amountIn: bigint, zeroForOne: boolean, decimals0: number, decimals1: number): bigint {
     if (pool.pool.type === "uniswap-v2" || pool.pool.type === "aerodrome-v2") {
       if (!pool.reserve0 || !pool.reserve1) return 0n;
-      const fee = pool.pool.type === "aerodrome-v2" ? 997n : 997n; // both use 0.3%
+      const fee = 997n; // 0.3% for both Uni V2 and Aerodrome
       const [reserveIn, reserveOut] = zeroForOne
         ? [pool.reserve0, pool.reserve1]
         : [pool.reserve1, pool.reserve0];
@@ -236,31 +236,34 @@ export class ArbListener {
       return (amountInWithFee * reserveOut) / (reserveIn * 1000n + amountInWithFee);
     } else {
       // V3 — approximate using sqrtPriceX96
-      // This is rough — for exact amounts we'd need tick math
-      // But good enough for opportunity detection; exact simulation happens on-chain
+      // Rough estimate; exact simulation happens on-chain
       if (!pool.sqrtPriceX96 || !pool.liquidity) return 0n;
 
       const sqrtPrice = pool.sqrtPriceX96;
-      const liq = pool.liquidity;
 
-      // Very rough V3 estimate using constant product around current tick
-      // Real execution will differ, which is why the contract checks minProfit
       const feeBps = BigInt(pool.pool.fee || 3000);
       const feeMultiplier = 1000000n - feeBps * 100n;
+
+      // Decimal adjustment: V3 price is in token1/token0 raw units
+      const decimalDiff = decimals0 - decimals1;
+      const decimalScale = 10n ** BigInt(Math.abs(decimalDiff));
 
       if (zeroForOne) {
         // token0 → token1
         const price = (sqrtPrice * sqrtPrice) / (1n << 192n);
         if (price === 0n) return 0n;
-        const grossOut = (amountIn * price * feeMultiplier) / 1000000n;
-        // Scale for WETH(18) → USDC(6) decimal difference
-        return grossOut / (10n ** 12n);
+        let grossOut = (amountIn * price * feeMultiplier) / 1000000n;
+        if (decimalDiff > 0) grossOut = grossOut / decimalScale;
+        else if (decimalDiff < 0) grossOut = grossOut * decimalScale;
+        return grossOut;
       } else {
         // token1 → token0
         if (sqrtPrice === 0n) return 0n;
         const invPrice = (1n << 192n) / (sqrtPrice * sqrtPrice);
-        const grossOut = (amountIn * invPrice * feeMultiplier) / 1000000n;
-        return grossOut * (10n ** 12n);
+        let grossOut = (amountIn * invPrice * feeMultiplier) / 1000000n;
+        if (decimalDiff > 0) grossOut = grossOut * decimalScale;
+        else if (decimalDiff < 0) grossOut = grossOut / decimalScale;
+        return grossOut;
       }
     }
   }
