@@ -18,6 +18,8 @@ import { Store } from "./store/index.js";
 import { Executor } from "./executor/index.js";
 import { TelegramAlert } from "./alerts/telegram.js";
 import { flags, printFlags } from "./config/flags.js";
+import { ArbListener } from "./listener/arb-listener.js";
+import { executeArb } from "./executor/strategies/arb.js";
 
 interface ChainConfig {
   chain: Chain;
@@ -73,6 +75,8 @@ async function main() {
   let totalScanned = 0;
   let totalFlagged = 0;
   let totalExecuted = 0;
+  let totalArbsFound = 0;
+  let totalArbsExecuted = 0;
 
   const stoppers: (() => void)[] = [];
 
@@ -141,6 +145,32 @@ async function main() {
       await factoryListener.start();
       stoppers.push(() => factoryListener.stop());
     }
+
+    // Arb scanner — only on Base
+    if (flags.arbScanner && name === "base") {
+      const dryRun = process.env.EXECUTOR_LIVE !== "true";
+      const arbListener = new ArbListener(client, 2000, 5);
+
+      arbListener.onOpportunity(async (opp) => {
+        totalArbsFound++;
+        console.log(`[arb] Found: ${opp.pair.symbol} ${opp.buyPool.pool.label} → ${opp.sellPool.pool.label} (${opp.profitBps.toFixed(1)}bps)`);
+
+        const result = await executeArb(opp, client, dryRun);
+        if (result.success) {
+          totalArbsExecuted++;
+          tg.alertFinding({
+            contract: { address: opp.buyPool.pool.address, chain: "base", deployer: "0x" as any, bytecode: "0x" as any, txHash: "0x" as any, blockNumber: 0n, timestamp: 0 },
+            findings: [{ detector: "arb", severity: "low", title: `Arb: ${opp.pair.symbol}`, description: `${opp.buyPool.pool.label} → ${opp.sellPool.pool.label} | ${opp.profitBps.toFixed(1)}bps` }],
+            tags: new Set(["arb"]),
+            meta: {},
+            score: 10,
+          });
+        }
+      });
+
+      await arbListener.start();
+      stoppers.push(() => arbListener.stop());
+    }
   }
 
   if (!hasChains) {
@@ -149,7 +179,7 @@ async function main() {
   }
 
   setInterval(() => {
-    console.log(`\n--- Scanned: ${totalScanned} | Flagged: ${totalFlagged} | Executed: ${totalExecuted} ---\n`);
+    console.log(`\n--- Scanned: ${totalScanned} | Flagged: ${totalFlagged} | Executed: ${totalExecuted} | Arbs: ${totalArbsFound}/${totalArbsExecuted} ---\n`);
   }, 60_000);
 
   process.on("SIGINT", () => {

@@ -13,6 +13,9 @@ export const flags = {
   vulnDetectors: flag("ENABLE_VULN_DETECTORS", true),
   sniper: flag("ENABLE_SNIPER", true),
 
+  // Arb
+  arbScanner: flag("ENABLE_ARB_SCANNER", true),
+
   // Execution
   executor: flag("ENABLE_EXECUTOR", true),
 };
