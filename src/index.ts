@@ -17,6 +17,7 @@ import {
 import { Store } from "./store/index.js";
 import { Executor } from "./executor/index.js";
 import { TelegramAlert } from "./alerts/telegram.js";
+import { flags, printFlags } from "./config/flags.js";
 
 interface ChainConfig {
   chain: Chain;
@@ -40,22 +41,31 @@ async function main() {
   const store = new Store();
   console.log("Database: backdraft.db\n");
 
+  printFlags();
+
   const pipeline = new Pipeline();
   console.log("Loading detectors:");
-  // Phase 1: bytecode-only prescreen (0 RPC calls)
   pipeline.register(prescreenDetector);
-  // Phase 2: RPC-heavy detectors (gated — only run if prescreen found something or it's a pool)
-  pipeline.register(proxyDetector, true);
-  pipeline.register(initializerDetector, true);
-  pipeline.register(openWithdrawalDetector, true);
-  pipeline.register(ownershipDetector, true);
-  pipeline.register(valueDetector, true);
-  pipeline.register(honeypotDetector, true);
+
+  if (flags.vulnDetectors) {
+    pipeline.register(proxyDetector, true);
+    pipeline.register(initializerDetector, true);
+    pipeline.register(openWithdrawalDetector, true);
+    pipeline.register(ownershipDetector, true);
+    pipeline.register(valueDetector, true);
+  }
+
+  if (flags.sniper) {
+    pipeline.register(honeypotDetector, true);
+  }
   console.log("");
 
-  console.log("Executor:");
-  const executor = new Executor();
-  console.log("");
+  let executor: Executor | null = null;
+  if (flags.executor) {
+    console.log("Executor:");
+    executor = new Executor();
+    console.log("");
+  }
 
   const tg = new TelegramAlert();
   console.log(`Telegram: ${tg.enabled ? "enabled" : "disabled (set TG_BOT_TOKEN + TG_CHAT_ID)"}\n`);
@@ -81,6 +91,8 @@ async function main() {
         console.log(formatResult(result));
         tg.alertFinding(result);
       }
+
+      if (!executor) return;
 
       const shouldExecute = (result.score >= EXECUTE_THRESHOLD && result.findings.some(f => f.severity === "critical"))
         || result.tags.has("snipeable");
@@ -116,17 +128,19 @@ async function main() {
 
     const handler = makeHandler(client);
 
-    // Direct deployment listener
-    const deployListener = new DeploymentListener(client, name);
-    deployListener.onDeploy(handler);
-    await deployListener.start();
-    stoppers.push(() => deployListener.stop());
+    if (flags.deploymentListener) {
+      const deployListener = new DeploymentListener(client, name);
+      deployListener.onDeploy(handler);
+      await deployListener.start();
+      stoppers.push(() => deployListener.stop());
+    }
 
-    // Factory event listener
-    const factoryListener = new FactoryListener(client, name);
-    factoryListener.onDeploy(handler);
-    await factoryListener.start();
-    stoppers.push(() => factoryListener.stop());
+    if (flags.factoryListener) {
+      const factoryListener = new FactoryListener(client, name);
+      factoryListener.onDeploy(handler);
+      await factoryListener.start();
+      stoppers.push(() => factoryListener.stop());
+    }
   }
 
   if (!hasChains) {
