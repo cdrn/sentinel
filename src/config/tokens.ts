@@ -38,6 +38,13 @@ export const ROUTERS_BY_CHAIN: Record<string, `0x${string}`> = {
   base: "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24",
 };
 
+// Uniswap V3 QuoterV2 addresses per chain (for V3 swap simulation)
+export const V3_QUOTERS_BY_CHAIN: Record<string, `0x${string}`> = {
+  ethereum: "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
+  arbitrum: "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
+  base: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a",
+};
+
 export function isBaseToken(chain: string, address: string): boolean {
   const tokens = TOKENS_BY_CHAIN[chain];
   if (!tokens) return false;

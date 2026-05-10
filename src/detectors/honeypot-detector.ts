@@ -1,6 +1,6 @@
-import { erc20Abi, encodeFunctionData, decodeFunctionResult, formatUnits } from "viem";
+import { erc20Abi, encodeFunctionData, decodeFunctionResult, formatUnits, parseAbi } from "viem";
 import type { Detector, DetectorContext } from "./types.js";
-import { isBaseToken, getBaseToken, TOKENS_BY_CHAIN, ROUTERS_BY_CHAIN } from "../config/tokens.js";
+import { isBaseToken, getBaseToken, TOKENS_BY_CHAIN, ROUTERS_BY_CHAIN, V3_QUOTERS_BY_CHAIN } from "../config/tokens.js";
 
 // Uniswap V2 Router ABI (just what we need)
 const ROUTER_ABI = [
@@ -15,6 +15,37 @@ const ROUTER_ABI = [
     outputs: [{ name: "amounts", type: "uint256[]" }],
   },
 ] as const;
+
+// Uniswap V3 QuoterV2 — quoteExactInputSingle simulates a swap and returns expected output.
+// State-mutating in declaration but eth_call'able; reverts on impossible swap.
+const V3_QUOTER_ABI = [
+  {
+    name: "quoteExactInputSingle",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [{
+      name: "params",
+      type: "tuple",
+      components: [
+        { name: "tokenIn", type: "address" },
+        { name: "tokenOut", type: "address" },
+        { name: "amountIn", type: "uint256" },
+        { name: "fee", type: "uint24" },
+        { name: "sqrtPriceLimitX96", type: "uint160" },
+      ],
+    }],
+    outputs: [
+      { name: "amountOut", type: "uint256" },
+      { name: "sqrtPriceX96After", type: "uint160" },
+      { name: "initializedTicksCrossed", type: "uint32" },
+      { name: "gasEstimate", type: "uint256" },
+    ],
+  },
+] as const;
+
+const V3_POOL_ABI = parseAbi([
+  "function fee() view returns (uint24)",
+]);
 
 // Suspicious function selectors in token bytecode
 const HONEYPOT_SELECTORS: Record<string, string> = {
@@ -182,11 +213,11 @@ export const honeypotDetector: Detector = {
     ctx.meta.baseLiquidity = baseLiqFormatted;
     ctx.meta.baseLiquidityRaw = baseLiquidity.toString();
 
-    // Simulate buy+sell via router getAmountsOut
-    const router = ROUTERS_BY_CHAIN[chain];
-    if (!router) return;
+    // Pick simulator based on pool type — V2 uses router.getAmountsOut, V3 uses QuoterV2.
+    // Without this branch, V3 pools always fail the V2 sim and get wrongly flagged as honeypots.
+    const dexType = contract.poolInfo.dexType;
+    const useV3 = dexType === "uniswap-v3";
 
-    // Simulate buying with a small amount of base token
     const testAmount = baseToken.decimals === 18
       ? 10n ** 16n // 0.01 ETH/WETH
       : 10n ** BigInt(baseToken.decimals); // 1 USDC/USDT/DAI
@@ -196,31 +227,92 @@ export const honeypotDetector: Detector = {
     let buyReverted = false;
     let sellReverted = false;
 
-    // Simulate buy: base → new token
-    try {
-      const buyResult = await client.readContract({
-        address: router,
-        abi: ROUTER_ABI,
-        functionName: "getAmountsOut",
-        args: [testAmount, [baseTokenAddr, newToken]],
-      });
-      buyOutput = buyResult[1];
-    } catch {
-      buyReverted = true;
-    }
+    if (useV3) {
+      const quoter = V3_QUOTERS_BY_CHAIN[chain];
+      if (!quoter) return;
 
-    // Simulate sell: new token → base
-    if (buyOutput > 0n) {
+      // Read fee tier from the V3 pool itself
+      let fee = 3000;
       try {
-        const sellResult = await client.readContract({
+        fee = await client.readContract({
+          address: contract.address,
+          abi: V3_POOL_ABI,
+          functionName: "fee",
+        });
+      } catch {
+        // Pool doesn't expose fee — bail; we can't simulate without it
+        return;
+      }
+      ctx.meta.v3Fee = fee;
+
+      // Simulate buy: base → new token
+      try {
+        const result = await client.readContract({
+          address: quoter,
+          abi: V3_QUOTER_ABI,
+          functionName: "quoteExactInputSingle",
+          args: [{
+            tokenIn: baseTokenAddr as `0x${string}`,
+            tokenOut: newToken as `0x${string}`,
+            amountIn: testAmount,
+            fee,
+            sqrtPriceLimitX96: 0n,
+          }],
+        });
+        buyOutput = result[0];
+      } catch {
+        buyReverted = true;
+      }
+
+      // Simulate sell: new token → base
+      if (buyOutput > 0n) {
+        try {
+          const result = await client.readContract({
+            address: quoter,
+            abi: V3_QUOTER_ABI,
+            functionName: "quoteExactInputSingle",
+            args: [{
+              tokenIn: newToken as `0x${string}`,
+              tokenOut: baseTokenAddr as `0x${string}`,
+              amountIn: buyOutput,
+              fee,
+              sqrtPriceLimitX96: 0n,
+            }],
+          });
+          sellOutput = result[0];
+        } catch {
+          sellReverted = true;
+        }
+      }
+    } else {
+      // V2 path
+      const router = ROUTERS_BY_CHAIN[chain];
+      if (!router) return;
+
+      try {
+        const buyResult = await client.readContract({
           address: router,
           abi: ROUTER_ABI,
           functionName: "getAmountsOut",
-          args: [buyOutput, [newToken, baseTokenAddr]],
+          args: [testAmount, [baseTokenAddr, newToken]],
         });
-        sellOutput = sellResult[1];
+        buyOutput = buyResult[1];
       } catch {
-        sellReverted = true;
+        buyReverted = true;
+      }
+
+      if (buyOutput > 0n) {
+        try {
+          const sellResult = await client.readContract({
+            address: router,
+            abi: ROUTER_ABI,
+            functionName: "getAmountsOut",
+            args: [buyOutput, [newToken, baseTokenAddr]],
+          });
+          sellOutput = sellResult[1];
+        } catch {
+          sellReverted = true;
+        }
       }
     }
 
