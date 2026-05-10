@@ -49,6 +49,7 @@ export class ArbListener {
   private interval: ReturnType<typeof setInterval> | null = null;
   private pollMs: number;
   private minProfitBps: number;
+  private dynamicPairs: PairPools[] = [];
 
   constructor(
     client: PublicClient<Transport, Chain>,
@@ -64,8 +65,27 @@ export class ArbListener {
     this.handlers.push(handler);
   }
 
+  addPair(pair: PairPools) {
+    // Avoid duplicates
+    const key = `${pair.token0.toLowerCase()}-${pair.token1.toLowerCase()}`;
+    const exists = this.dynamicPairs.some(
+      p => `${p.token0.toLowerCase()}-${p.token1.toLowerCase()}` === key
+    ) || BASE_PAIRS.some(
+      p => `${p.token0.toLowerCase()}-${p.token1.toLowerCase()}` === key
+    );
+    if (!exists) {
+      this.dynamicPairs.push(pair);
+      console.log(`[arb] Added dynamic pair: ${pair.symbol} (${pair.pools.length} pools)`);
+    }
+  }
+
+  private getAllPairs(): PairPools[] {
+    return [...BASE_PAIRS, ...this.dynamicPairs];
+  }
+
   async start() {
-    console.log(`[arb] Monitoring ${BASE_PAIRS.length} pairs across ${BASE_PAIRS.reduce((s, p) => s + p.pools.length, 0)} pools`);
+    const allPairs = this.getAllPairs();
+    console.log(`[arb] Monitoring ${allPairs.length} pairs across ${allPairs.reduce((s, p) => s + p.pools.length, 0)} pools (${BASE_PAIRS.length} static + ${this.dynamicPairs.length} dynamic)`);
     console.log(`[arb] Poll interval: ${this.pollMs}ms, min profit: ${this.minProfitBps}bps`);
 
     // Initial scan
@@ -83,7 +103,7 @@ export class ArbListener {
   }
 
   private async scan() {
-    for (const pair of BASE_PAIRS) {
+    for (const pair of this.getAllPairs()) {
       try {
         const prices = await this.fetchPrices(pair);
         if (prices.length < 2) continue;

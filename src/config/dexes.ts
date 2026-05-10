@@ -229,3 +229,13 @@ export const BASE_PAIRS: PairPools[] = [
 
 // Arb contract address on Base
 export const ARB_CONTRACT = "0xce8bb30aa456bea30b93d79dc3a77957ddb265d0" as const;
+
+// WETH address exported for pair discovery
+export const BASE_WETH = WETH;
+
+// Factory addresses on Base — for querying existing pools
+export const BASE_FACTORIES = {
+  uniswapV2: "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6" as `0x${string}`,
+  uniswapV3: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD" as `0x${string}`,
+  aerodromeV2: "0x420DD381b31aEf6683db6B902084cB0FFECe40Da" as `0x${string}`,
+};

@@ -19,6 +19,7 @@ import { Executor } from "./executor/index.js";
 import { TelegramAlert } from "./alerts/telegram.js";
 import { flags, printFlags } from "./config/flags.js";
 import { ArbListener } from "./listener/arb-listener.js";
+import { PairDiscovery } from "./listener/pair-discovery.js";
 import { executeArb } from "./executor/strategies/arb.js";
 
 interface ChainConfig {
@@ -139,9 +140,18 @@ async function main() {
       stoppers.push(() => deployListener.stop());
     }
 
+    // Set up pair discovery for Base before factory listener so we can hook into it
+    let discovery: PairDiscovery | null = null;
+    if (flags.arbScanner && name === "base") {
+      discovery = new PairDiscovery(client, store);
+    }
+
     if (flags.factoryListener) {
       const factoryListener = new FactoryListener(client, name);
       factoryListener.onDeploy(handler);
+      if (discovery) {
+        factoryListener.onDeploy((contract) => discovery!.handleFactoryEvent(contract));
+      }
       await factoryListener.start();
       stoppers.push(() => factoryListener.stop());
     }
@@ -150,6 +160,20 @@ async function main() {
     if (flags.arbScanner && name === "base") {
       const dryRun = process.env.EXECUTOR_LIVE !== "true";
       const arbListener = new ArbListener(client, 2000, 5);
+
+      // Load saved dynamic pairs from DB
+      const savedPairs = store.getActiveArbPairs();
+      for (const pair of savedPairs) {
+        arbListener.addPair(pair);
+      }
+      if (savedPairs.length > 0) {
+        console.log(`[discovery] Loaded ${savedPairs.length} saved pairs from DB`);
+      }
+
+      // Wire discovery into arb listener
+      if (discovery) {
+        discovery.onNewPair((pair) => arbListener.addPair(pair));
+      }
 
       arbListener.onOpportunity(async (opp) => {
         totalArbsFound++;

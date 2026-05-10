@@ -3,6 +3,7 @@ import path from "path";
 import type { PipelineResult } from "../detectors/pipeline.js";
 import type { Finding } from "../detectors/types.js";
 import type { ExecutionResult } from "../executor/index.js";
+import type { PairPools, PoolConfig } from "../config/dexes.js";
 
 const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), "backdraft.db");
 
@@ -59,6 +60,22 @@ export class Store {
         gas_estimate TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
+
+      CREATE TABLE IF NOT EXISTS arb_pairs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token0 TEXT NOT NULL,
+        token1 TEXT NOT NULL,
+        decimals0 INTEGER NOT NULL DEFAULT 18,
+        decimals1 INTEGER NOT NULL DEFAULT 18,
+        symbol TEXT NOT NULL,
+        pools TEXT NOT NULL DEFAULT '[]',
+        active INTEGER NOT NULL DEFAULT 1,
+        discovered_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_checked TEXT,
+        UNIQUE(token0, token1)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_arb_pairs_active ON arb_pairs(active);
     `);
   }
 
@@ -150,6 +167,70 @@ export class Store {
       exec.error || null,
       exec.gasEstimate?.toString() || null
     );
+  }
+
+  saveArbPair(pair: PairPools): boolean {
+    const existing = this.db.prepare(
+      "SELECT id, pools FROM arb_pairs WHERE token0 = ? AND token1 = ?"
+    ).get(pair.token0.toLowerCase(), pair.token1.toLowerCase()) as any;
+
+    if (existing) {
+      // Merge pools — add any new pool addresses
+      const existingPools: PoolConfig[] = JSON.parse(existing.pools);
+      const existingAddrs = new Set(existingPools.map(p => p.address.toLowerCase()));
+      let added = false;
+      for (const pool of pair.pools) {
+        if (!existingAddrs.has(pool.address.toLowerCase())) {
+          existingPools.push(pool);
+          added = true;
+        }
+      }
+      if (added) {
+        this.db.prepare(
+          "UPDATE arb_pairs SET pools = ?, active = 1 WHERE id = ?"
+        ).run(JSON.stringify(existingPools), existing.id);
+      }
+      return added;
+    }
+
+    this.db.prepare(
+      "INSERT INTO arb_pairs (token0, token1, decimals0, decimals1, symbol, pools) VALUES (?, ?, ?, ?, ?, ?)"
+    ).run(
+      pair.token0.toLowerCase(),
+      pair.token1.toLowerCase(),
+      pair.decimals0,
+      pair.decimals1,
+      pair.symbol,
+      JSON.stringify(pair.pools),
+    );
+    return true;
+  }
+
+  getActiveArbPairs(): PairPools[] {
+    const rows = this.db.prepare(
+      "SELECT * FROM arb_pairs WHERE active = 1"
+    ).all() as any[];
+
+    return rows.map(row => ({
+      token0: row.token0 as `0x${string}`,
+      token1: row.token1 as `0x${string}`,
+      decimals0: row.decimals0,
+      decimals1: row.decimals1,
+      symbol: row.symbol,
+      pools: JSON.parse(row.pools),
+    }));
+  }
+
+  deactivateArbPair(token0: string, token1: string) {
+    this.db.prepare(
+      "UPDATE arb_pairs SET active = 0 WHERE token0 = ? AND token1 = ?"
+    ).run(token0.toLowerCase(), token1.toLowerCase());
+  }
+
+  touchArbPair(token0: string, token1: string) {
+    this.db.prepare(
+      "UPDATE arb_pairs SET last_checked = datetime('now') WHERE token0 = ? AND token1 = ?"
+    ).run(token0.toLowerCase(), token1.toLowerCase());
   }
 
   close() {
